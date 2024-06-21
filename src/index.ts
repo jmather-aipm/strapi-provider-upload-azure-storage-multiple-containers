@@ -16,12 +16,10 @@ type DefaultConfig = {
     sasToken: string;
     account: string;
     serviceBaseURL?: string;
-    containerName: string;
+    containers: ContainerConfig[];
     defaultPath: string;
     cdnBaseURL?: string;
     defaultCacheControl?: string;
-    createContainerIfNotExist?: string;
-    publicAccessType?: PublicAccessType;
     removeCN?: string;
 };
 
@@ -30,14 +28,18 @@ type ManagedIdentityConfig = {
     clientId?: string;
     account: string;
     serviceBaseURL?: string;
-    containerName: string;
+    containers: ContainerConfig[];
     defaultPath: string;
     cdnBaseURL?: string;
     defaultCacheControl?: string;
-    createContainerIfNotExist?: string;
-    publicAccessType?: PublicAccessType;
     removeCN?: string;
 };
+
+type ContainerConfig = {
+    containerName: string;
+    createContainerIfNotExist?: string;
+    publicAccessType?: PublicAccessType;
+}
 
 type StrapiFile = File & {
     stream: internal.Readable;
@@ -104,18 +106,21 @@ const uploadOptions = {
 async function handleUpload(
     config: Config,
     blobSvcClient: BlobServiceClient,
-    file: StrapiFile
+    file: StrapiFile,
+    containerName: string
 ): Promise<void> {
     const serviceBaseURL = getServiceBaseUrl(config);
-    const containerClient = blobSvcClient.getContainerClient(trimParam(config.containerName));
+    const containerClient = blobSvcClient.getContainerClient(trimParam(containerName));
     const client = containerClient.getBlockBlobClient(getFileName(config.defaultPath, file));
 
-    if (trimParam(config?.createContainerIfNotExist) === 'true') {
+    const containerConfig = config.containers.find(c => c.containerName === containerName);
+
+    if (trimParam(containerConfig?.createContainerIfNotExist) === 'true') {
         if (
-            trimParam(config?.publicAccessType) === 'container' ||
-            trimParam(config?.publicAccessType) === 'blob'
+            trimParam(containerConfig?.publicAccessType) === 'container' ||
+            trimParam(containerConfig?.publicAccessType) === 'blob'
         ) {
-            await containerClient.createIfNotExists({ access: config.publicAccessType });
+            await containerClient.createIfNotExists({ access: containerConfig.publicAccessType });
         } else {
             await containerClient.createIfNotExists();
         }
@@ -131,11 +136,11 @@ async function handleUpload(
     const cdnBaseURL = trimParam(config.cdnBaseURL);
     file.url = cdnBaseURL ? client.url.replace(serviceBaseURL, cdnBaseURL) : client.url;
     if (
-        file.url.includes(`/${config.containerName}/`) &&
+        file.url.includes(`/${containerName}/`) &&
         config.removeCN &&
         config.removeCN == 'true'
     ) {
-        file.url = file.url.replace(`/${config.containerName}/`, '/');
+        file.url = file.url.replace(`/${containerName}/`, '/');
     }
 
     await client.uploadStream(
@@ -149,9 +154,10 @@ async function handleUpload(
 async function handleDelete(
     config: Config,
     blobSvcClient: BlobServiceClient,
-    file: StrapiFile
+    file: StrapiFile,
+    containerName: string
 ): Promise<void> {
-    const containerClient = blobSvcClient.getContainerClient(trimParam(config.containerName));
+    const containerClient = blobSvcClient.getContainerClient(trimParam(containerName));
     const client = containerClient.getBlobClient(getFileName(config.defaultPath, file));
     await client.delete();
     file.url = client.url;
@@ -180,17 +186,9 @@ module.exports = {
             label: 'Base service URL to be used, optional. Defaults to https://${account}.blob.core.windows.net (optional)',
             type: 'text',
         },
-        containerName: {
-            label: 'Container name (required)',
-            type: 'text',
-        },
-        createContainerIfNotExist: {
-            label: 'Create container on upload if it does not (optional)',
-            type: 'text',
-        },
-        publicAccessType: {
-            label: 'If createContainerIfNotExist is true, set the public access type to one of "blob" or "container" (optional)',
-            type: 'text',
+        containers: {
+            label: 'Array of containers (required)',
+            type: 'json',
         },
         cdnBaseURL: {
             label: 'CDN base url (optional)',
@@ -208,14 +206,14 @@ module.exports = {
     init: (config: Config) => {
         const blobSvcClient = makeBlobServiceClient(config);
         return {
-            upload(file: StrapiFile) {
-                return handleUpload(config, blobSvcClient, file);
+            upload(file: StrapiFile, containerName: string) {
+                return handleUpload(config, blobSvcClient, file, containerName);
             },
-            uploadStream(file: StrapiFile) {
-                return handleUpload(config, blobSvcClient, file);
+            uploadStream(file: StrapiFile, containerName: string) {
+                return handleUpload(config, blobSvcClient, file, containerName);
             },
-            delete(file: StrapiFile) {
-                return handleDelete(config, blobSvcClient, file);
+            delete(file: StrapiFile, containerName: string) {
+                return handleDelete(config, blobSvcClient, file, containerName);
             },
         };
     },
